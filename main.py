@@ -134,6 +134,9 @@ async def _php(method: str, path: str, **kwargs) -> dict:
     """Call the PHP backend. Returns parsed JSON dict."""
     url = PHP_BASE_URL.rstrip("/") + path
     headers = kwargs.pop("headers", {})
+    # Use Authorization header — standard headers are never stripped by proxies.
+    # X-Internal-Key kept as secondary fallback.
+    headers["Authorization"]  = f"Bearer {INTERNAL_KEY}"
     headers["X-Internal-Key"] = INTERNAL_KEY
 
     async with httpx.AsyncClient(timeout=10.0) as client:
