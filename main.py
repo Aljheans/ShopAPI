@@ -331,48 +331,93 @@ async def get_items_by_group(
 
 
 # ─────────────────────────────────────────────────────────
-#  Routes — Orders (auth required)
+#  Routes — Orders
 # ─────────────────────────────────────────────────────────
 class OrderRequest(BaseModel):
+    admin_id:   int
     item_id:    int
     variant_id: int
     suboption:  str = ""
+    screenshot: str  # base64 data URI
 
 
-@app.post(
-    "/order",
-    summary="Purchase a variant slot — decrements available slots",
-)
+class StatusUpdate(BaseModel):
+    order_id: int
+    status:   str  # reviewing | approved | cancelled
+
+
+@app.post("/order", summary="Place an order (requires login)")
 async def create_order(
     body: OrderRequest,
     token_payload: dict = Depends(require_access_token),
 ):
     user_id = int(token_payload["sub"])
-
-    php_resp = await _php("POST", "/api/purchase_item.php", json={
+    php_resp = await _php("POST", "/api/create_order.php", json={
         "user_id":    user_id,
+        "admin_id":   body.admin_id,
         "item_id":    body.item_id,
         "variant_id": body.variant_id,
         "suboption":  body.suboption,
+        "screenshot": body.screenshot,
     })
-
     if php_resp.get("status") != "success":
         code = 409 if "slot" in php_resp.get("message", "").lower() else 400
-        raise HTTPException(status_code=code, detail=php_resp.get("message", "Purchase failed."))
-
+        raise HTTPException(status_code=code, detail=php_resp.get("message", "Order failed."))
     return php_resp
 
 
-@app.get(
-    "/orders/me",
-    summary="Get the current user's purchase history",
-)
+@app.get("/orders", summary="Get orders — superadmin sees all, admin sees own")
+async def get_orders(token_payload: dict = Depends(require_access_token)):
+    user_id = int(token_payload["sub"])
+    role    = token_payload.get("role", "admin")
+    php_resp = await _php("GET", f"/api/get_orders.php?requester_id={user_id}&role={role}")
+    if php_resp.get("status") != "success":
+        raise HTTPException(502, "Could not fetch orders.")
+    return {"orders": php_resp.get("orders", [])}
+
+
+@app.get("/orders/{order_id}", summary="Get a single order with screenshot")
+async def get_order(order_id: int, token_payload: dict = Depends(require_access_token)):
+    php_resp = await _php("GET", f"/api/manage_order.php?id={order_id}")
+    if php_resp.get("status") != "success":
+        raise HTTPException(404, "Order not found.")
+    return php_resp.get("order")
+
+
+@app.post("/orders/status", summary="Update order status (admin only)")
+async def update_order_status(
+    body: StatusUpdate,
+    token_payload: dict = Depends(require_access_token),
+):
+    role = token_payload.get("role", "user")
+    if role not in ("admin", "superadmin"):
+        raise HTTPException(403, "Admin access required.")
+    admin_id = int(token_payload["sub"])
+    php_resp = await _php("POST", "/api/manage_order.php", json={
+        "order_id": body.order_id,
+        "status":   body.status,
+        "admin_id": admin_id,
+    })
+    if php_resp.get("status") != "success":
+        raise HTTPException(400, php_resp.get("message", "Update failed."))
+    return php_resp
+
+
+@app.get("/orders/me", summary="Get current user purchase history")
 async def my_orders(token_payload: dict = Depends(require_access_token)):
     user_id = int(token_payload["sub"])
     php_resp = await _php("GET", f"/api/get_user_orders.php?user_id={user_id}")
     if php_resp.get("status") != "success":
         raise HTTPException(502, "Could not fetch orders.")
     return {"orders": php_resp.get("orders", [])}
+
+
+@app.get("/admins", summary="Get list of admins for user to choose from")
+async def get_admins():
+    php_resp = await _php("GET", "/api/get_admins.php")
+    if php_resp.get("status") != "success":
+        raise HTTPException(502, "Could not fetch admins.")
+    return {"admins": php_resp.get("admins", [])}
 
 
 # ─────────────────────────────────────────────────────────
