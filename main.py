@@ -331,6 +331,51 @@ async def get_items_by_group(
 
 
 # ─────────────────────────────────────────────────────────
+#  Routes — Orders (auth required)
+# ─────────────────────────────────────────────────────────
+class OrderRequest(BaseModel):
+    item_id:    int
+    variant_id: int
+    suboption:  str = ""
+
+
+@app.post(
+    "/order",
+    summary="Purchase a variant slot — decrements available slots",
+)
+async def create_order(
+    body: OrderRequest,
+    token_payload: dict = Depends(require_access_token),
+):
+    user_id = int(token_payload["sub"])
+
+    php_resp = await _php("POST", "/api/purchase_item.php", json={
+        "user_id":    user_id,
+        "item_id":    body.item_id,
+        "variant_id": body.variant_id,
+        "suboption":  body.suboption,
+    })
+
+    if php_resp.get("status") != "success":
+        code = 409 if "slot" in php_resp.get("message", "").lower() else 400
+        raise HTTPException(status_code=code, detail=php_resp.get("message", "Purchase failed."))
+
+    return php_resp
+
+
+@app.get(
+    "/orders/me",
+    summary="Get the current user's purchase history",
+)
+async def my_orders(token_payload: dict = Depends(require_access_token)):
+    user_id = int(token_payload["sub"])
+    php_resp = await _php("GET", f"/api/get_user_orders.php?user_id={user_id}")
+    if php_resp.get("status") != "success":
+        raise HTTPException(502, "Could not fetch orders.")
+    return {"orders": php_resp.get("orders", [])}
+
+
+# ─────────────────────────────────────────────────────────
 #  Health
 # ─────────────────────────────────────────────────────────
 @app.get("/ping", summary="Health check")
